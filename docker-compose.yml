@@ -1,0 +1,122 @@
+
+version: '3.8'
+
+services:
+  # Frontend React application
+  frontend:
+    build:
+      context: https://github.com/cscheidegger/FrontMVP.git
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+    environment:
+      - VITE_API_URL=http://localhost:8000/api
+    restart: unless-stopped
+    networks:
+      - proteus-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # FastAPI backend
+  api:
+    build:
+      context: https://github.com/cscheidegger/APIMVP.git
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/proteuslab
+      - SECRET_KEY=${SECRET_KEY:-insecure-secret-key-for-dev-only}
+      - EMAIL_ENABLED=${EMAIL_ENABLED:-False}
+      - EMAIL_SENDER=${EMAIL_SENDER:-noreply@proteuslab.com}
+      - SMTP_SERVER=${SMTP_SERVER:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-True}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
+      - GDRIVE_ENABLED=${GDRIVE_ENABLED:-False}
+      - GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID}
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./uploads:/app/uploads
+      - ./scripts:/app/scripts
+    restart: unless-stopped
+    networks:
+      - proteus-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # PostgreSQL database
+  postgres:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=proteuslab
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    restart: unless-stopped
+    networks:
+      - proteus-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis cache
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - proteus-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Instagram feed service
+  instagram-service:
+    build:
+      context: ./instagram-service
+      dockerfile: Dockerfile
+    depends_on:
+      - api
+    environment:
+      - API_URL=http://api:8000/api
+      - INSTAGRAM_REFRESH_INTERVAL=3600
+    restart: unless-stopped
+    networks:
+      - proteus-network
+
+networks:
+  proteus-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
